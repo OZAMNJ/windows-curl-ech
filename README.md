@@ -70,6 +70,21 @@ Run our automated, deterministic validation suite to ensure ECH is functioning:
 
 This suite will test endpoints with valid ECH configurations (e.g., Cloudflare Trace) and purposely broken endpoints, verifying strict TLS and ECH negotiation status without false positives.
 
+## Cross-Platform ECH Wrapper
+
+We provide a robust, production-safe wrapper script (`scripts/curl-ech-wrapper.sh`) designed to intelligently manage ECH executions.
+
+### Features
+1. **OS Compatibility:** Automatically calls `curl.exe` on Windows environments to prevent alias clashes with PowerShell's native `Invoke-WebRequest`.
+2. **Version & Feature Validation:** Safely parses `curl -V` to ensure you are running `curl >= 8.8.0` with ECH support compiled in. If ECH is unavailable, it gracefully disables the flag instead of crashing.
+3. **Graceful Fallbacks:** If an ECH connection is rejected or fails due to network conditions, the wrapper will catch the failure and automatically retry the request without ECH, keeping your production pipelines stable.
+4. **Debug Mode:** Use the `--debug` flag to see exact binary paths, version strings, and execution arrays.
+
+**Usage:**
+```bash
+./scripts/curl-ech-wrapper.sh --ech-mode hard --debug --cacert cacert.pem --doh-url https://cloudflare-dns.com/dns-query https://cloudflare-ech.com/cdn-cgi/trace
+```
+
 ---
 
 ## Troubleshooting
