@@ -81,10 +81,10 @@ log_info "Validation passed: ECH and wolfSSL present."
 log_info "--- Generating Manifest ---"
 mkdir -p release_bin
 cp /mingw64/bin/curl.exe release_bin/
-cp /mingw64/bin/libcurl-4.dll release_bin/
-cp /mingw64/bin/libwolfssl-44.dll release_bin/
-cp /mingw64/bin/zlib1.dll release_bin/
-cp /mingw64/bin/libzstd.dll release_bin/
+cp /mingw64/bin/libcurl-*.dll release_bin/
+cp /mingw64/bin/libwolfssl-*.dll release_bin/
+cp /mingw64/bin/zlib*.dll release_bin/
+cp /mingw64/bin/libzstd*.dll release_bin/
 
 cd release_bin
 CURL_HASH=$(sha256sum curl.exe | awk '{print $1}')
