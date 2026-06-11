@@ -29,7 +29,7 @@ log_info "=== ECH Curl Validation Suite ==="
 # Download cacert.pem dynamically if missing
 if [[ ! -f "$CACERT_FILE" ]]; then
     log_info "Downloading Mozilla CA certificate ($CACERT_FILE)..."
-    if ! "$CURL_BIN" -sS -L "$CACERT_URL" -o "$CACERT_FILE" --fail --connect-timeout 15 --max-time 30; then
+    if ! "$CURL_BIN" -k -sS -L "$CACERT_URL" -o "$CACERT_FILE" --fail --connect-timeout 15 --max-time 30; then
         log_error "Failed to download $CACERT_FILE from $CACERT_URL"
         exit 1
     fi
