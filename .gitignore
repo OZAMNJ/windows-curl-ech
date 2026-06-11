@@ -1,0 +1,9 @@
+# Build artifacts
+*.zip
+*.tar.gz
+*.exe
+*.dll
+
+# Logs and tests
+curl_ech_results.csv
+cacert.pem

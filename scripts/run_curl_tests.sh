@@ -20,9 +20,14 @@ urls=(
 
 echo "Index,URL,Result" > curl_ech_results.csv
 
+if [ ! -f "cacert.pem" ]; then
+    echo "Downloading Mozilla CA certificate..."
+    curl -sL "https://curl.se/ca/cacert.pem" -o cacert.pem
+fi
+
 idx=0
 for url in "${urls[@]}"; do
-    output=$(/mingw64/bin/curl -s --cacert C:/Users/PRAJA/.gemini/antigravity-ide/scratch/cacert.pem --ech hard --doh-url https://cloudflare-dns.com/dns-query "$url" | grep -o '"SSL_ECH_STATUS"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
+    output=$(/mingw64/bin/curl -s --cacert cacert.pem --ech hard --doh-url https://cloudflare-dns.com/dns-query "$url" | grep -o '"SSL_ECH_STATUS"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
     
     if [ -z "$output" ]; then
         output="failed/timeout"

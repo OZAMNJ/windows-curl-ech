@@ -11,15 +11,18 @@ By compiling `curl` from source with the `wolfSSL` cryptographic backend, this b
 You don't need to compile anything! You can download the ready-to-use executable from the **Releases** page on this repository.
 
 1. Download `curl-ech-windows-x64.zip` from the latest Release.
-2. Extract the folder (it contains `curl.exe` and its required DLLs).
+2. Extract the folder (it contains `curl.exe`, its required DLLs, and a standard Mozilla `cacert.pem`).
 3. Open your terminal in the extracted folder and run your curl commands!
+
+**Release v1.0.1 Checksum (SHA256):**
+`2F58CDBE0D7E277D320C62C577406C4BDAEC9A3BDD956738316FF04975226489`
 
 ### Usage Example
 
 To test ECH against Cloudflare's diagnostic trace, run:
 
 ```bash
-curl.exe -s --ech hard --doh-url https://cloudflare-dns.com/dns-query https://cloudflare-ech.com/cdn-cgi/trace | findstr sni
+curl.exe -s --cacert cacert.pem --ech hard --doh-url https://cloudflare-dns.com/dns-query https://cloudflare-ech.com/cdn-cgi/trace | findstr sni
 ```
 *If successful, it will print `sni=encrypted`.*
 
