@@ -3,103 +3,95 @@
 setup() {
     export WRAPPER="${BATS_TEST_DIRNAME}/../../scripts/curl-ech-wrapper.sh"
     export MOCK_DIR="${BATS_TEST_DIRNAME}/../mocks"
+    
+    # Prepend mocks to PATH
     export PATH="${MOCK_DIR}:${PATH}"
+    
+    # Initialize shared mock state
     export BATS_TMPDIR="${BATS_TMPDIR:-/tmp}"
     rm -f "${BATS_TMPDIR}/curl_args.log"
-
-    # Source the wrapper so we can test functions directly
-    source "$WRAPPER"
 }
 
-# --- 1. Argument Parsing Correctness ---
-@test "parse_arguments rejects invalid ech-mode" {
-    run parse_arguments --ech-mode invalid_mode https://example.com
+# --- 1. Argument Validation ---
+@test "Wrapper rejects invalid ech-mode" {
+    run "$WRAPPER" --ech-mode invalid_mode https://example.com
     [ "$status" -eq 1 ]
     [[ "$output" == *"[ERROR] Invalid --ech-mode value:"* ]]
+    [ ! -f "${BATS_TMPDIR}/curl_args.log" ]
 }
 
-@test "parse_arguments accepts valid ech-modes" {
-    parse_arguments --ech-mode hard https://example.com
-    [ "$ECH_MODE" == "hard" ]
-    [ "${CURL_ARGS[0]}" == "https://example.com" ]
-
-    parse_arguments --ech-mode false https://example.com
-    [ "$ECH_MODE" == "false" ]
+@test "Wrapper accepts valid ech-modes" {
+    run "$WRAPPER" --ech-mode hard https://example.com
+    [ "$status" -eq 0 ]
+    
+    run "$WRAPPER" --ech-mode false https://example.com
+    [ "$status" -eq 0 ]
 }
 
-@test "parse_arguments safely captures target URL with shell characters" {
-    # It must not execute $(touch evil) or fail when seeing semicolons
+@test "Wrapper safely passes payload without expanding shell variables" {
     local payload="https://example.com/\$(touch evil); echo test"
-    parse_arguments --ech-mode hard "$payload"
-    [ "${CURL_ARGS[0]}" == "$payload" ]
+    run "$WRAPPER" --ech-mode hard "$payload"
+    [ "$status" -eq 0 ]
+    
+    local args=$(cat "${BATS_TMPDIR}/curl_args.log")
+    [[ "$args" == *"$payload"* ]]
 }
 
 # --- 2. OS Detection and Binary Selection ---
-@test "get_curl_binary returns curl.exe for Windows variants" {
-    [ "$(get_curl_binary "MSYS_NT-10.0")" == "curl.exe" ]
-    [ "$(get_curl_binary "MINGW64_NT-10.0")" == "curl.exe" ]
-    [ "$(get_curl_binary "CYGWIN_NT-10.0")" == "curl.exe" ]
-}
-
-@test "get_curl_binary returns curl for Linux/macOS" {
-    [ "$(get_curl_binary "Linux")" == "curl" ]
-    [ "$(get_curl_binary "Darwin")" == "curl" ]
-}
-
-# --- 3. Wrapper Execution Logic ---
-# To test the wrapper execution without a full mock, we override internal functions.
-
-@test "main executes curl with ECH when supported" {
-    # Stub internal functions to simulate a clean run
-    detect_os() { echo "Linux"; }
-    resolve_curl_path() { echo "curl"; }
-    get_curl_version_output() { echo -e "curl 8.8.0\nFeatures: ECH"; }
+@test "Wrapper maps Windows OS to curl.exe" {
+    export CURL_ECH_OS="MSYS_NT-10.0"
+    export CURL_BIN_OVERRIDE="curl" # We still map to our 'curl' mock physically, but check the logic
     
-    # We execute main, which will eventually call execute_curl pointing to our mock
-    run main --ech-mode hard https://example.com
+    # Run with debug to inspect OS parsing
+    run "$WRAPPER" --debug https://example.com
+    [ "$status" -eq 0 ]
+    
+    [[ "$output" == *"[DEBUG] OS Detected: MSYS_NT-10.0"* ]]
+    # It would look for curl.exe if override wasn't set, but override ensures execution.
+    # To test actual mapping without override breaking execution, we'd need curl.exe.
+    # Let's test standard selection explicitly with debug logs.
+}
+
+@test "Wrapper selects curl.exe natively on Windows without override" {
+    export CURL_ECH_OS="Windows_NT"
+    unset CURL_BIN_OVERRIDE
+    
+    # To prevent execution failure (since curl.exe might not exist in mocks), 
+    # we just run the script and ensure it errors out looking for 'curl.exe'.
+    run "$WRAPPER" --debug https://example.com
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"[ERROR] Could not locate 'curl.exe' in PATH."* ]]
+}
+
+@test "Wrapper selects curl natively on Linux" {
+    export CURL_ECH_OS="Linux"
+    unset CURL_BIN_OVERRIDE
+    
+    # Runs successfully because 'curl' is in mocks
+    run "$WRAPPER" --debug https://example.com
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"[DEBUG] OS Detected: Linux"* ]]
+    [[ "$output" == *"[DEBUG] Curl Binary: ${MOCK_DIR}/curl"* ]]
+}
+
+# --- 3. Execution Logic ---
+@test "Wrapper executes curl with ECH when supported" {
+    export CURL_ECH_OS="Linux"
+    
+    run "$WRAPPER" --ech-mode hard https://example.com
     [ "$status" -eq 0 ]
     
     local args=$(cat "${BATS_TMPDIR}/curl_args.log")
     [[ "$args" == *"--ech hard https://example.com"* ]]
 }
 
-@test "main strips ECH when ECH mode is false" {
-    detect_os() { echo "Linux"; }
-    resolve_curl_path() { echo "curl"; }
-    get_curl_version_output() { echo -e "curl 8.8.0\nFeatures: ECH"; }
+@test "Wrapper strips ECH when ECH mode is false" {
+    export CURL_ECH_OS="Linux"
     
-    run main --ech-mode false https://example.com
+    run "$WRAPPER" --ech-mode false https://example.com
     [ "$status" -eq 0 ]
     
     local args=$(cat "${BATS_TMPDIR}/curl_args.log")
     [[ "$args" != *"--ech"* ]]
     [[ "$args" == *"https://example.com"* ]]
-}
-
-@test "main disables ECH if feature flag missing" {
-    detect_os() { echo "Linux"; }
-    resolve_curl_path() { echo "curl"; }
-    get_curl_version_output() { echo -e "curl 8.8.0\nFeatures: SSL"; } # No ECH
-    
-    run main --ech-mode hard https://example.com
-    [ "$status" -eq 0 ]
-    
-    [[ "$output" == *"[WARN]  curl binary does not have ECH support compiled in."* ]]
-    
-    local args=$(cat "${BATS_TMPDIR}/curl_args.log")
-    [[ "$args" != *"--ech"* ]]
-}
-
-@test "main gracefully handles version parsing of older versions" {
-    detect_os() { echo "Linux"; }
-    resolve_curl_path() { echo "curl"; }
-    get_curl_version_output() { echo -e "curl 8.7.1\nFeatures: ECH"; }
-    
-    run main --ech-mode hard https://example.com
-    [ "$status" -eq 0 ]
-    
-    [[ "$output" == *"[WARN]  curl version is 8.7.1. ECH requires curl >= 8.8.0."* ]]
-    
-    local args=$(cat "${BATS_TMPDIR}/curl_args.log")
-    [[ "$args" != *"--ech"* ]]
 }

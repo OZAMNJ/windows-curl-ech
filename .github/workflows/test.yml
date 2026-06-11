@@ -24,13 +24,17 @@ jobs:
           fi
 
   test:
-    name: Test (${{ matrix.os }})
+    name: Test (${{ matrix.role }})
     needs: security
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: true
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            role: "Logic Validation"
+          - os: windows-latest
+            role: "MSYS2 Compatibility"
     
     defaults:
       run:
@@ -53,7 +57,6 @@ jobs:
     - name: Install BATS Core
       run: |
         if [ "$RUNNER_OS" == "Windows" ]; then
-          # Install BATS from source on MSYS2
           git clone https://github.com/bats-core/bats-core.git
           cd bats-core
           ./install.sh /usr/local
