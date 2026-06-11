@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# ==============================================================================
+# ECH Test Validation Suite
+# 
+# CACERT HANDLING:
+# This script requires a Mozilla Root CA Certificate bundle to validate the
+# TLS handshake (since we are not using the Windows native Schannel). 
+# If 'cacert.pem' is not found in the current directory, it will be downloaded
+# securely from curl.se.
+# ==============================================================================
+
 # Configuration
 RETRY_COUNT=3
 CURL_BIN="/mingw64/bin/curl"
@@ -14,20 +24,20 @@ log_info()  { echo "[INFO]  $*" ; }
 log_warn()  { echo "[WARN]  $*" >&2 ; }
 log_error() { echo "[ERROR] $*" >&2 ; }
 
-# Initialization and Checks
 log_info "=== ECH Curl Validation Suite ==="
 
-if [[ ! -x "$CURL_BIN" ]]; then
-    log_error "curl binary not found at $CURL_BIN"
-    exit 1
-fi
-
+# Download cacert.pem dynamically if missing
 if [[ ! -f "$CACERT_FILE" ]]; then
-    log_info "Downloading Mozilla CA certificate..."
+    log_info "Downloading Mozilla CA certificate ($CACERT_FILE)..."
     if ! "$CURL_BIN" -sS -L "$CACERT_URL" -o "$CACERT_FILE" --fail --connect-timeout 15 --max-time 30; then
         log_error "Failed to download $CACERT_FILE from $CACERT_URL"
         exit 1
     fi
+fi
+
+if [[ ! -x "$CURL_BIN" ]]; then
+    log_error "curl binary not found at $CURL_BIN"
+    exit 1
 fi
 
 CURL_V=$("$CURL_BIN" -V)
@@ -72,38 +82,24 @@ execute_test() {
 
     log_info "Running Test: $test_name ($target_url)"
     
-    # We dump headers to a file and body to stdout
     local tmp_body="tmp_body.txt"
     local tmp_stderr="tmp_stderr.txt"
-    
-    # Run request with timeout and fail-fast
-    set +e
-    run_with_retry "$RETRY_COUNT" \
-        "$CURL_BIN" -sS --cacert "$CACERT_FILE" --ech hard --doh-url "$DOH_URL" \
-        --connect-timeout 10 --max-time 30 \
-        -w "%{http_code}" -o "$tmp_body" "$target_url" 2> "$tmp_stderr"
-    local exit_code=$?
-    set -e
-
-    local http_code
-    http_code=$(cat "$tmp_body" | tail -c 3 || echo "000") # Extremely simplistic fallback, actual w-out capture is complex in bash.
-    # Actually, a better approach for write-out is to write it to a separate file. Let's do that properly.
-    
-    # Real execution
     local wout_file="tmp_wout.txt"
+    
     set +e
     run_with_retry "$RETRY_COUNT" \
         "$CURL_BIN" -sS --cacert "$CACERT_FILE" --ech hard --doh-url "$DOH_URL" \
         --connect-timeout 10 --max-time 30 \
         -w "%{http_code}" -o "$tmp_body" "$target_url" > "$wout_file" 2> "$tmp_stderr"
-    exit_code=$?
+    local exit_code=$?
     set -e
 
-    http_code=$(cat "$wout_file")
+    local http_code
+    http_code=$(cat "$wout_file" 2>/dev/null || echo "000")
     local body
-    body=$(cat "$tmp_body")
+    body=$(cat "$tmp_body" 2>/dev/null || echo "")
     local err_log
-    err_log=$(cat "$tmp_stderr")
+    err_log=$(cat "$tmp_stderr" 2>/dev/null || echo "")
 
     local tls_status="Failed"
     local ech_status="Failed"
@@ -120,7 +116,6 @@ execute_test() {
             ech_status="Success"
         fi
     elif [[ "$target_url" == *"defo.ie"* ]]; then
-        # Defo returns structured JSON. Use jq if available, otherwise fallback
         if command -v jq >/dev/null 2>&1; then
             local parsed
             parsed=$(echo "$body" | jq -r '.SSL_ECH_STATUS' 2>/dev/null || echo "null")
