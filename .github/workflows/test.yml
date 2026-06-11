@@ -1,0 +1,33 @@
+name: Test ECH Wrapper
+
+on:
+  push:
+    paths:
+      - 'scripts/curl-ech-wrapper.sh'
+      - 'tests/**'
+      - '.github/workflows/test.yml'
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install BATS Core
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y bats
+
+    - name: Make Scripts Executable
+      run: |
+        chmod +x scripts/curl-ech-wrapper.sh
+        chmod +x tests/mocks/curl
+        chmod +x tests/mocks/curl.exe
+        chmod +x tests/mocks/curl-fail
+        chmod +x tests/mocks/curl-fail-once
+
+    - name: Run BATS Test Suite
+      run: |
+        bats tests/bats/ech-wrapper.bats
