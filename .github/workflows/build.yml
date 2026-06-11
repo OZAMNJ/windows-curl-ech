@@ -23,7 +23,7 @@ jobs:
         install: >-
           make
           cmake
-          gcc
+          mingw-w64-x86_64-gcc
           git
           nasm
           autoconf
