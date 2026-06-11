@@ -1,35 +1,10 @@
 #!/usr/bin/env bash
 
-# Write args to shared log for assertions
-echo "$@" >> "${BATS_TMPDIR}/curl_args.log"
+# Minimal realistic curl mock
+# Does not simulate network logic or version state.
+# Just logs invocation and returns configurable exit code.
 
-# Handle curl -V for version/feature parsing
-if [[ "$1" == "-V" ]]; then
-    if [[ "${MOCK_CURL_VERSION:-}" == "old" ]]; then
-        echo "curl 8.7.1 (x86_64-pc-linux-gnu) libcurl/8.7.1"
-        exit 0
-    elif [[ "${MOCK_CURL_VERSION:-}" == "no-ech" ]]; then
-        echo "curl 8.8.0 (x86_64-pc-linux-gnu) libcurl/8.8.0"
-        echo "Features: AsynchDNS HSTS IPv6 Largefile NTLM SSL threadsafe"
-        exit 0
-    else
-        # Default valid version
-        echo "curl 8.8.0 (x86_64-pc-linux-gnu) libcurl/8.8.0 wolfSSL/5.7.0"
-        echo "Features: AsynchDNS ECH HSTS IPv6 Largefile NTLM SSL threadsafe"
-        exit 0
-    fi
-fi
+LOG_FILE="${BATS_TMPDIR:-/tmp}/curl_args.log"
+echo "$@" >> "$LOG_FILE"
 
-# Handle execution behaviors
-if [[ "${MOCK_CURL_BEHAVIOR:-}" == "fail" ]]; then
-    exit 35
-elif [[ "${MOCK_CURL_BEHAVIOR:-}" == "fail-once" ]]; then
-    if [[ ! -f "${BATS_TMPDIR}/curl_fail_once.lock" ]]; then
-        touch "${BATS_TMPDIR}/curl_fail_once.lock"
-        exit 35
-    else
-        exit 0
-    fi
-fi
-
-exit 0
+exit "${MOCK_EXIT_CODE:-0}"

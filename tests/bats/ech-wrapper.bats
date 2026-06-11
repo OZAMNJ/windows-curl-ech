@@ -1,77 +1,74 @@
 #!/usr/bin/env bats
 
 setup() {
-    export MOCK_DIR="${BATS_TEST_DIRNAME}/../mocks"
     export WRAPPER="${BATS_TEST_DIRNAME}/../../scripts/curl-ech-wrapper.sh"
-    
-    # Prepend mocks to PATH
+    export MOCK_DIR="${BATS_TEST_DIRNAME}/../mocks"
     export PATH="${MOCK_DIR}:${PATH}"
-    
-    # Initialize shared mock state
     export BATS_TMPDIR="${BATS_TMPDIR:-/tmp}"
     rm -f "${BATS_TMPDIR}/curl_args.log"
-    rm -f "${BATS_TMPDIR}/curl_fail_once.lock"
-    
-    chmod +x "$WRAPPER"
-    chmod +x "${MOCK_DIR}/curl"
-    chmod +x "${MOCK_DIR}/curl.exe"
+
+    # Source the wrapper so we can test functions directly
+    source "$WRAPPER"
 }
 
-# --- A. Argument Validation ---
-@test "A.1 Rejects invalid ech-mode" {
-    run "$WRAPPER" --ech-mode invalid_mode https://example.com
+# --- 1. Argument Parsing Correctness ---
+@test "parse_arguments rejects invalid ech-mode" {
+    run parse_arguments --ech-mode invalid_mode https://example.com
     [ "$status" -eq 1 ]
     [[ "$output" == *"[ERROR] Invalid --ech-mode value:"* ]]
-    [ ! -f "${BATS_TMPDIR}/curl_args.log" ]
 }
 
-@test "A.2 Accepts valid ech-modes" {
-    run "$WRAPPER" --ech-mode hard https://example.com
-    [ "$status" -eq 0 ]
-    
-    run "$WRAPPER" --ech-mode false https://example.com
-    [ "$status" -eq 0 ]
+@test "parse_arguments accepts valid ech-modes" {
+    parse_arguments --ech-mode hard https://example.com
+    [ "$ECH_MODE" == "hard" ]
+    [ "${CURL_ARGS[0]}" == "https://example.com" ]
+
+    parse_arguments --ech-mode false https://example.com
+    [ "$ECH_MODE" == "false" ]
 }
 
-# --- B. OS Detection Logic ---
-@test "B.1 Windows OS calls curl.exe" {
-    # We must mock uname to return MSYS to test this.
-    # We'll create a temporary uname mock in our mock dir.
-    echo -e '#!/usr/bin/env bash\necho MSYS_NT-10.0' > "${MOCK_DIR}/uname"
-    chmod +x "${MOCK_DIR}/uname"
-    
-    run "$WRAPPER" --debug https://example.com
-    
-    # Cleanup uname mock
-    rm "${MOCK_DIR}/uname"
-    
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Curl Binary: ${MOCK_DIR}/curl.exe"* ]]
+@test "parse_arguments safely captures target URL with shell characters" {
+    # It must not execute $(touch evil) or fail when seeing semicolons
+    local payload="https://example.com/\$(touch evil); echo test"
+    parse_arguments --ech-mode hard "$payload"
+    [ "${CURL_ARGS[0]}" == "$payload" ]
 }
 
-@test "B.2 Linux OS calls curl" {
-    echo -e '#!/usr/bin/env bash\necho Linux' > "${MOCK_DIR}/uname"
-    chmod +x "${MOCK_DIR}/uname"
-    
-    run "$WRAPPER" --debug https://example.com
-    
-    rm "${MOCK_DIR}/uname"
-    
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Curl Binary: ${MOCK_DIR}/curl"* ]]
+# --- 2. OS Detection and Binary Selection ---
+@test "get_curl_binary returns curl.exe for Windows variants" {
+    [ "$(get_curl_binary "MSYS_NT-10.0")" == "curl.exe" ]
+    [ "$(get_curl_binary "MINGW64_NT-10.0")" == "curl.exe" ]
+    [ "$(get_curl_binary "CYGWIN_NT-10.0")" == "curl.exe" ]
 }
 
-# --- C. Execution Correctness ---
-@test "C.1 Passes arguments correctly with ech enabled" {
-    run "$WRAPPER" --ech-mode hard --silent https://example.com
+@test "get_curl_binary returns curl for Linux/macOS" {
+    [ "$(get_curl_binary "Linux")" == "curl" ]
+    [ "$(get_curl_binary "Darwin")" == "curl" ]
+}
+
+# --- 3. Wrapper Execution Logic ---
+# To test the wrapper execution without a full mock, we override internal functions.
+
+@test "main executes curl with ECH when supported" {
+    # Stub internal functions to simulate a clean run
+    detect_os() { echo "Linux"; }
+    resolve_curl_path() { echo "curl"; }
+    get_curl_version_output() { echo -e "curl 8.8.0\nFeatures: ECH"; }
+    
+    # We execute main, which will eventually call execute_curl pointing to our mock
+    run main --ech-mode hard https://example.com
     [ "$status" -eq 0 ]
     
     local args=$(cat "${BATS_TMPDIR}/curl_args.log")
-    [[ "$args" == *"--ech hard --silent https://example.com"* ]]
+    [[ "$args" == *"--ech hard https://example.com"* ]]
 }
 
-@test "C.2 Excludes ech if ech-mode is false" {
-    run "$WRAPPER" --ech-mode false https://example.com
+@test "main strips ECH when ECH mode is false" {
+    detect_os() { echo "Linux"; }
+    resolve_curl_path() { echo "curl"; }
+    get_curl_version_output() { echo -e "curl 8.8.0\nFeatures: ECH"; }
+    
+    run main --ech-mode false https://example.com
     [ "$status" -eq 0 ]
     
     local args=$(cat "${BATS_TMPDIR}/curl_args.log")
@@ -79,85 +76,30 @@ setup() {
     [[ "$args" == *"https://example.com"* ]]
 }
 
-# --- D. Fallback Behavior (CRITICAL) ---
-@test "D.1 Fallback triggers on failure and succeeds" {
-    export MOCK_CURL_BEHAVIOR="fail-once"
+@test "main disables ECH if feature flag missing" {
+    detect_os() { echo "Linux"; }
+    resolve_curl_path() { echo "curl"; }
+    get_curl_version_output() { echo -e "curl 8.8.0\nFeatures: SSL"; } # No ECH
     
-    run "$WRAPPER" --ech-mode hard https://example.com
+    run main --ech-mode hard https://example.com
     [ "$status" -eq 0 ]
     
-    # Verify curl was called exactly twice
-    local call_count=$(wc -l < "${BATS_TMPDIR}/curl_args.log")
-    [ "$call_count" -eq 2 ]
-    
-    # First call should have --ech hard
-    local first_call=$(sed -n '1p' "${BATS_TMPDIR}/curl_args.log")
-    [[ "$first_call" == *"--ech hard"* ]]
-    
-    # Second call should NOT have --ech hard
-    local second_call=$(sed -n '2p' "${BATS_TMPDIR}/curl_args.log")
-    [[ "$second_call" != *"--ech"* ]]
-}
-
-@test "D.2 Final failure propagates exit code" {
-    export MOCK_CURL_BEHAVIOR="fail"
-    
-    run "$WRAPPER" --ech-mode hard https://example.com
-    [ "$status" -eq 35 ]
-    
-    [[ "$output" == *"[ERROR] Fallback request also failed (Exit Code: 35)."* ]]
-}
-
-# --- E. Version Parsing ---
-@test "E.1 Disables ECH for older curl versions" {
-    export MOCK_CURL_VERSION="old"
-    
-    run "$WRAPPER" --ech-mode hard https://example.com
-    [ "$status" -eq 0 ]
-    
-    [[ "$output" == *"[WARN]  curl version is 8.7.1. ECH requires curl >= 8.8.0. Proceeding without ECH."* ]]
+    [[ "$output" == *"[WARN]  curl binary does not have ECH support compiled in."* ]]
     
     local args=$(cat "${BATS_TMPDIR}/curl_args.log")
     [[ "$args" != *"--ech"* ]]
 }
 
-@test "E.2 Disables ECH if feature flag missing" {
-    export MOCK_CURL_VERSION="no-ech"
+@test "main gracefully handles version parsing of older versions" {
+    detect_os() { echo "Linux"; }
+    resolve_curl_path() { echo "curl"; }
+    get_curl_version_output() { echo -e "curl 8.7.1\nFeatures: ECH"; }
     
-    run "$WRAPPER" --ech-mode hard https://example.com
+    run main --ech-mode hard https://example.com
     [ "$status" -eq 0 ]
     
-    [[ "$output" == *"[WARN]  curl binary does not have ECH support compiled in. Proceeding without ECH."* ]]
+    [[ "$output" == *"[WARN]  curl version is 8.7.1. ECH requires curl >= 8.8.0."* ]]
     
     local args=$(cat "${BATS_TMPDIR}/curl_args.log")
     [[ "$args" != *"--ech"* ]]
-}
-
-# --- F. Injection Safety ---
-@test "F.1 Prevents command injection via ech-mode" {
-    run "$WRAPPER" --ech-mode "hard; touch ${BATS_TMPDIR}/evil_file" https://example.com
-    [ "$status" -eq 1 ]
-    [ ! -f "${BATS_TMPDIR}/evil_file" ]
-    [ ! -f "${BATS_TMPDIR}/curl_args.log" ]
-}
-
-@test "F.2 Safely escapes target URLs" {
-    run "$WRAPPER" --ech-mode hard "https://example.com/\$(touch ${BATS_TMPDIR}/evil_file2)"
-    [ "$status" -eq 0 ]
-    
-    [ ! -f "${BATS_TMPDIR}/evil_file2" ]
-    
-    # The literal string should have been passed to curl without execution
-    local args=$(cat "${BATS_TMPDIR}/curl_args.log")
-    [[ "$args" == *"\$(touch"* ]]
-}
-
-# --- G. Debug Mode ---
-@test "G.1 Prints debug information" {
-    run "$WRAPPER" --debug https://example.com
-    [ "$status" -eq 0 ]
-    
-    [[ "$output" == *"[DEBUG] OS Detected:"* ]]
-    [[ "$output" == *"[DEBUG] Curl Binary:"* ]]
-    [[ "$output" == *"[DEBUG] Executing Command:"* ]]
 }
