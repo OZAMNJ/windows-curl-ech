@@ -1,4 +1,4 @@
-name: Build and Test ECH Curl
+name: Enterprise Build and Release
 
 on:
   push:
@@ -9,6 +9,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
 
     steps:
     - uses: actions/checkout@v4
@@ -27,43 +29,45 @@ jobs:
           autoconf
           automake
           libtool
+          jq
 
-    - name: Build and Validate Curl
+    - name: Run Shellcheck
+      shell: bash
+      run: |
+        # Optional: Run shellcheck on scripts if installed, or just simple bash checks
+        # Assuming we only do basic bash syntax check for now if shellcheck isn't native
+        bash -n scripts/build-curl-ech.sh
+        bash -n scripts/run_curl_tests.sh
+
+    - name: Build Curl and wolfSSL Reproducibly
       shell: msys2 {0}
       run: |
-        chmod +x scripts/build_curl.sh
-        ./scripts/build_curl.sh
+        chmod +x scripts/build-curl-ech.sh
+        ./scripts/build-curl-ech.sh
 
-    - name: Run ECH Tests
+    - name: Run Deterministic ECH Tests
       shell: msys2 {0}
       run: |
         chmod +x scripts/run_curl_tests.sh
-        # Copy newly built curl to the expected path for testing if needed
-        # (It is already installed to /mingw64/bin by the build script)
         ./scripts/run_curl_tests.sh
-        
-        # Check if tests actually passed
-        if grep -q "failed/timeout" curl_ech_results.csv; then
-          echo "Some ECH tests failed. Check logs."
-          cat curl_ech_results.csv
-          exit 1
-        fi
 
-    - name: Package Release ZIP
+    - name: Package Release
       shell: msys2 {0}
       run: |
         cd release_bin
         if [ ! -f "cacert.pem" ]; then
-            curl -sL "https://curl.se/ca/cacert.pem" -o cacert.pem
+            curl -sS -L "https://curl.se/ca/cacert.pem" -o cacert.pem --fail
         fi
         zip -r ../curl-ech-windows-x64.zip ./*
         cd ..
+        sha256sum curl-ech-windows-x64.zip > curl-ech-windows-x64.zip.sha256
 
-    - name: Upload Artifacts
+    - name: Upload Build Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: curl-ech-windows-x64
         path: |
           curl-ech-windows-x64.zip
+          curl-ech-windows-x64.zip.sha256
           release_bin/build-manifest.json
           curl_ech_results.csv

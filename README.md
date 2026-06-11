@@ -1,75 +1,91 @@
 # Curl with Encrypted Client Hello (ECH) for Windows
 
-This repository provides a custom-compiled version of `curl` for Windows that natively supports **Encrypted Client Hello (ECH)**. It is built reproducibly via GitHub Actions using the `wolfSSL` cryptographic backend.
+## Overview
 
-The native `curl.exe` bundled with Windows 10/11 uses the Microsoft Schannel TLS backend, which currently does not support the ECH standard. By compiling `curl` from source with `wolfSSL`, this build fully unlocks strict ECH support on the Windows command line, ensuring your Server Name Indication (SNI) is completely encrypted during the TLS handshake.
+This repository provides a custom-compiled version of `curl` for Windows that natively supports **Encrypted Client Hello (ECH)**.
 
-## Security & Provenance
+**What is ECH?**
+During a standard TLS handshake, the Server Name Indication (SNI) is sent in plaintext, revealing the exact domain you are visiting to your ISP, network administrators, or passive eavesdroppers. **ECH** encrypts this handshake, completely blinding network observers to your destination domain.
 
-We use a strict reproducible build pipeline via GitHub Actions.
-Every release contains a `build-manifest.json` that details the exact `curl` and `wolfSSL` Git commits, the compiler version, and the SHA256 hashes of the resulting binaries.
+**Supported Versions:**
+- `curl`: 8.8.0
+- `wolfSSL`: 5.7.0
 
-### Verifying Your Download
-To ensure the binary hasn't been tampered with, calculate the SHA256 hash of `curl.exe` locally and compare it to the manifest:
+*(Native `curl.exe` on Windows uses Schannel, which does not support ECH. This repository solves that by providing a fully reproducible build of curl using the wolfSSL cryptography backend.)*
 
-**PowerShell:**
+---
+
+## Security & Verification
+
+We provide enterprise-grade build reproducibility and provenance tracking. Every GitHub Action build guarantees parity with the source code.
+
+### Binary Verification
+
+To verify that your downloaded `curl-ech-windows-x64.zip` is authentic:
+
+**Windows PowerShell:**
 ```powershell
-Get-FileHash curl.exe -Algorithm SHA256
+Get-FileHash curl-ech-windows-x64.zip -Algorithm SHA256
 ```
+*(Compare the output to the `curl-ech-windows-x64.zip.sha256` file provided in the Release)*
 
 **Bash / MSYS2:**
 ```bash
-sha256sum curl.exe
+sha256sum -c curl-ech-windows-x64.zip.sha256
 ```
 
-## Download the Pre-compiled Binary
+Additionally, check `build-manifest.json` inside the ZIP to verify the exact Git commits, source tarball hashes, and compiler versions used during the build.
 
-You can download the ready-to-use executable from the **Releases** page.
-1. Download `curl-ech-windows-x64.zip` from the latest Release.
-2. Extract the folder (it contains `curl.exe`, its required DLLs, and a standard Mozilla `cacert.pem`).
-3. Open your terminal in the extracted folder and run your curl commands!
+---
 
-## ECH Prerequisites
+## Build Instructions
 
-> [!IMPORTANT]
-> ECH does not magically encrypt SNI for every website. It only works if **ALL** the following conditions are met:
-> 1. **Client Support:** You use this custom `curl` build.
-> 2. **Server Support:** The destination server supports ECH (e.g., Cloudflare-proxied sites).
-> 3. **DNS Configuration:** The server publishes an `HTTPS` DNS record containing the ECHConfigList.
-> 4. **Secure DNS (DoH/DoT):** You use `--doh-url` so `curl` can securely fetch the HTTPS DNS record without it being intercepted.
+### Windows (MSYS2)
 
-### Usage Example
+You can easily compile this securely yourself using our provided scripts:
 
-To test ECH against Cloudflare's diagnostic trace, run:
+1. **Install MSYS2:**
+   Open PowerShell as Administrator and run our secure installer wrapper:
+   ```powershell
+   .\scripts\install_msys2.ps1
+   ```
+   *(This downloads the exact MSYS2 release, verifies its SHA256 hash, and installs it to `C:\msys64`)*
+
+2. **Run Build Script:**
+   Open the **MSYS2 MinGW 64-bit** terminal and run:
+   ```bash
+   ./scripts/build-curl-ech.sh
+   ```
+   *(This downloads the exact `curl` and `wolfSSL` tarballs, validates their checksums, compiles them, and generates your new binary in the `release_bin/` folder).*
+
+---
+
+## Testing
+
+Run our automated, deterministic validation suite to ensure ECH is functioning:
 
 ```bash
-curl.exe -s --cacert cacert.pem --ech hard --doh-url https://cloudflare-dns.com/dns-query https://cloudflare-ech.com/cdn-cgi/trace | findstr sni
+./scripts/run_curl_tests.sh
 ```
-*If successful, it will print `sni=encrypted`.*
 
-## Compiling from Source
+This suite will test endpoints with valid ECH configurations (e.g., Cloudflare Trace) and purposely broken endpoints, verifying strict TLS and ECH negotiation status without false positives.
 
-If you wish to compile this yourself from source, run our automated build script in an MSYS2 environment. This script pins exact library versions for reproducibility.
-
-1. Install [MSYS2](https://www.msys2.org/) (or use `scripts/install_msys2.ps1`).
-2. Open the **MSYS2 MinGW 64-bit** terminal.
-3. Install dependencies: `pacman -S make cmake gcc git nasm autoconf automake libtool`
-4. Run our automated build: `./scripts/build_curl.sh`
-
-The compiled executable and the `build-manifest.json` will be output to the `release_bin/` directory.
-
-## Automated Validation Suite
-
-We provide a strict testing suite (`scripts/run_curl_tests.sh`) that runs post-compilation. It tests:
-* `curl -V` symbol validation (ensures `wolfSSL` and `ECH` are present).
-* ECH Negotiation Success (e.g., against `cloudflare-ech.com`).
-* ECH Negotiation Rejection (e.g., standard domains without ECH configs).
+---
 
 ## Troubleshooting
 
-- **`curl: (60) SSL certificate problem`**: You did not provide a CA certificate. Add `--cacert cacert.pem`.
-- **`curl: (3) URL using bad/illegal format or missing URL`**: Your `--doh-url` format is invalid.
-- **Connection Refused / Timeout**: The DoH server is unreachable or the destination server does not support ECH but you forced `--ech hard`. Fallback to `--ech true` (opportunistic) if the server does not strictly support ECH.
+### ECH Is Not Working / Handshake Fails
+ECH is a multi-layered protocol. It requires cooperation from the entire network stack.
+
+1. **Client Support:** Ensure you are using *this* custom `curl.exe` and NOT your native `C:\Windows\System32\curl.exe`. Run `curl -V` and look for `wolfSSL` and `ECH`.
+2. **DNS Record:** The destination server *must* publish an `HTTPS` DNS record containing the `ECHConfigList`. Use an external tool to check if the domain supports ECH.
+3. **Secure DNS:** You MUST pass a DNS-over-HTTPS server to curl using `--doh-url <url>`. If you rely on standard port 53 UDP DNS, your ISP can intercept the query, or curl will fail to securely fetch the required `HTTPS` record.
+4. **Certificate Errors:** If you get `SSL certificate problem`, ensure you pass `--cacert cacert.pem` to provide curl with root trust anchors.
+
+**Example Command for Testing:**
+```bash
+curl.exe -sS --cacert cacert.pem --ech hard --doh-url https://cloudflare-dns.com/dns-query https://cloudflare-ech.com/cdn-cgi/trace | grep sni
+```
 
 ## License
 MIT License
