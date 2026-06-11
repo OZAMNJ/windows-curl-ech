@@ -1,0 +1,69 @@
+name: Build and Test ECH Curl
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup MSYS2
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: >-
+          make
+          cmake
+          gcc
+          git
+          nasm
+          autoconf
+          automake
+          libtool
+
+    - name: Build and Validate Curl
+      shell: msys2 {0}
+      run: |
+        chmod +x scripts/build_curl.sh
+        ./scripts/build_curl.sh
+
+    - name: Run ECH Tests
+      shell: msys2 {0}
+      run: |
+        chmod +x scripts/run_curl_tests.sh
+        # Copy newly built curl to the expected path for testing if needed
+        # (It is already installed to /mingw64/bin by the build script)
+        ./scripts/run_curl_tests.sh
+        
+        # Check if tests actually passed
+        if grep -q "failed/timeout" curl_ech_results.csv; then
+          echo "Some ECH tests failed. Check logs."
+          cat curl_ech_results.csv
+          exit 1
+        fi
+
+    - name: Package Release ZIP
+      shell: msys2 {0}
+      run: |
+        cd release_bin
+        if [ ! -f "cacert.pem" ]; then
+            curl -sL "https://curl.se/ca/cacert.pem" -o cacert.pem
+        fi
+        zip -r ../curl-ech-windows-x64.zip ./*
+        cd ..
+
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: curl-ech-windows-x64
+        path: |
+          curl-ech-windows-x64.zip
+          release_bin/build-manifest.json
+          curl_ech_results.csv
